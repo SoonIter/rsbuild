@@ -1,5 +1,5 @@
 import { dev, gotoPage, proxyConsole } from '@e2e/helper';
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import { type RequestHandler, logger } from '@rsbuild/core';
 import { pluginAssetsRetry } from '@rsbuild/plugin-assets-retry';
 import type { PluginAssetsRetryOptions } from '@rsbuild/plugin-assets-retry';
@@ -76,6 +76,7 @@ async function createRsbuildWithMiddleware(
   middleware: RequestHandler | RequestHandler[],
   options: PluginAssetsRetryOptions,
   entry?: string,
+  port?: number,
 ) {
   const rsbuild = await dev({
     cwd: __dirname,
@@ -92,6 +93,9 @@ async function createRsbuildWithMiddleware(
             middlewares.unshift(...addMiddleWares);
           },
         ],
+      },
+      server: {
+        port,
       },
       ...(entry
         ? {
@@ -264,6 +268,113 @@ function delay(ms = 300) {
   });
 }
 
+async function proxyPageConsole(page: Page, port: number) {
+  const onRetryContextList: AssetsRetryHookContext[] = [];
+  const onSuccessContextList: AssetsRetryHookContext[] = [];
+  const onFailContextList: AssetsRetryHookContext[] = [];
+
+  const origin = `http://localhost:${port}`;
+
+  page.on('console', async (msg) => {
+    if (msg.type() !== 'info') {
+      return;
+    }
+    const typeValue = (await msg.args()[0].jsonValue()) as string;
+    const contextValue = (await msg
+      .args()[1]
+      .jsonValue()) as AssetsRetryHookContext;
+
+    if (
+      typeValue === 'onRetry' ||
+      typeValue === 'onSuccess' ||
+      typeValue === 'onFail'
+    ) {
+      // For snapshot
+      contextValue.url = contextValue.url?.replace(origin, '<ORIGIN>');
+      contextValue.domain = contextValue.domain?.replace(origin, '<ORIGIN>');
+    }
+
+    if (typeValue === 'onRetry') {
+      onRetryContextList.push(contextValue);
+    } else if (typeValue === 'onSuccess') {
+      onSuccessContextList.push(contextValue);
+    } else if (typeValue === 'onFail') {
+      onFailContextList.push(contextValue);
+    }
+  });
+  return {
+    onRetryContextList,
+    onSuccessContextList,
+    onFailContextList,
+  };
+}
+
+test('@rsbuild/plugin-assets-retry onRetry and onSuccess options should work in successfully retrying initial chunk', async ({
+  page,
+}) => {
+  const blockedMiddleware = createBlockMiddleware({
+    blockNum: 3,
+    urlPrefix: '/static/js/index.js',
+  });
+
+  const rsbuild = await createRsbuildWithMiddleware(blockedMiddleware, {
+    minify: true,
+    onRetry(context) {
+      console.info('onRetry', context);
+    },
+    onSuccess(context) {
+      console.info('onSuccess', context);
+    },
+    onFail(context) {
+      console.info('onFail', context);
+    },
+  });
+
+  const { onRetryContextList, onFailContextList, onSuccessContextList } =
+    await proxyPageConsole(page, rsbuild.port);
+  await gotoPage(page, rsbuild);
+  const compTestElement = page.locator('#comp-test');
+  await expect(compTestElement).toHaveText('Hello CompTest');
+  await delay();
+
+  expect({
+    onRetryContextList,
+    onFailContextList,
+    onSuccessContextList,
+  }).toMatchObject({
+    onRetryContextList: [
+      {
+        times: 0,
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/index.js',
+        tagName: 'script',
+      },
+      {
+        times: 1,
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/index.js',
+        tagName: 'script',
+      },
+      {
+        times: 2,
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/index.js',
+        tagName: 'script',
+      },
+    ],
+    onFailContextList: [],
+    onSuccessContextList: [
+      {
+        times: 3,
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/index.js',
+        tagName: 'script',
+      },
+    ],
+  });
+  await rsbuild.close();
+});
+
 test('@rsbuild/plugin-assets-retry onRetry and onSuccess options should work in successfully retrying async chunk', async ({
   page,
 }) => {
@@ -285,25 +396,8 @@ test('@rsbuild/plugin-assets-retry onRetry and onSuccess options should work in 
     },
   });
 
-  const onRetryContextList: AssetsRetryHookContext[] = [];
-  const onSuccessContextList: AssetsRetryHookContext[] = [];
-  const onFailContextList: AssetsRetryHookContext[] = [];
-
-  page.on('console', async (msg) => {
-    if (msg.type() !== 'info') {
-      return;
-    }
-    const typeValue = await msg.args()[0].jsonValue();
-    const contextValue = await msg.args()[1].jsonValue();
-
-    if (typeValue === 'onRetry') {
-      onRetryContextList.push(contextValue);
-    } else if (typeValue === 'onSuccess') {
-      onSuccessContextList.push(contextValue);
-    } else if (typeValue === 'onFail') {
-      onFailContextList.push(contextValue);
-    }
-  });
+  const { onRetryContextList, onFailContextList, onSuccessContextList } =
+    await proxyPageConsole(page, rsbuild.port);
 
   await gotoPage(page, rsbuild);
   const compTestElement = page.locator('#async-comp-test');
@@ -318,20 +412,20 @@ test('@rsbuild/plugin-assets-retry onRetry and onSuccess options should work in 
     onRetryContextList: [
       {
         times: 0,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
       {
         times: 1,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
       {
         times: 2,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
     ],
@@ -339,11 +433,83 @@ test('@rsbuild/plugin-assets-retry onRetry and onSuccess options should work in 
     onSuccessContextList: [
       {
         times: 3,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
     ],
+  });
+  await rsbuild.close();
+});
+
+test('@rsbuild/plugin-assets-retry onRetry and onFail options should work in failed retrying initial chunk', async ({
+  page,
+}) => {
+  const blockedMiddleware = createBlockMiddleware({
+    blockNum: 100,
+    urlPrefix: '/static/js/index.js',
+  });
+
+  const rsbuild = await createRsbuildWithMiddleware(
+    blockedMiddleware,
+    {
+      minify: true,
+      domain: ['http://localhost:3030', 'http://a.com', 'http://b.com'],
+      inlineScript: true,
+      onRetry(context) {
+        console.info('onRetry', context);
+      },
+      onSuccess(context) {
+        console.info('onSuccess', context);
+      },
+      onFail(context) {
+        console.info('onFail', context);
+      },
+    },
+    undefined,
+    3030,
+  );
+
+  const { onRetryContextList, onFailContextList, onSuccessContextList } =
+    await proxyPageConsole(page, rsbuild.port);
+
+  await gotoPage(page, rsbuild);
+  await delay();
+
+  expect({
+    onRetryContextList,
+    onFailContextList,
+    onSuccessContextList,
+  }).toMatchObject({
+    onRetryContextList: [
+      {
+        times: 0,
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/index.js',
+        tagName: 'script',
+      },
+      {
+        times: 1,
+        domain: 'http://a.com',
+        url: 'http://a.com/static/js/index.js',
+        tagName: 'script',
+      },
+      {
+        times: 2,
+        domain: 'http://b.com',
+        url: 'http://b.com/static/js/index.js',
+        tagName: 'script',
+      },
+    ],
+    onFailContextList: [
+      {
+        times: 3,
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/index.js',
+        tagName: 'script',
+      },
+    ],
+    onSuccessContextList: [],
   });
   await rsbuild.close();
 });
@@ -356,37 +522,27 @@ test('@rsbuild/plugin-assets-retry onRetry and onFail options should work in fai
     urlPrefix: '/static/js/async/src_AsyncCompTest_tsx.js',
   });
 
-  const rsbuild = await createRsbuildWithMiddleware(blockedMiddleware, {
-    minify: true,
-    onRetry(context) {
-      console.info('onRetry', context);
+  const rsbuild = await createRsbuildWithMiddleware(
+    blockedMiddleware,
+    {
+      minify: true,
+      domain: ['http://localhost:3031', 'http://a.com', 'http://b.com'],
+      onRetry(context) {
+        console.info('onRetry', context);
+      },
+      onSuccess(context) {
+        console.info('onSuccess', context);
+      },
+      onFail(context) {
+        console.info('onFail', context);
+      },
     },
-    onSuccess(context) {
-      console.info('onSuccess', context);
-    },
-    onFail(context) {
-      console.info('onFail', context);
-    },
-  });
+    undefined,
+    3031,
+  );
 
-  const onRetryContextList: AssetsRetryHookContext[] = [];
-  const onSuccessContextList: AssetsRetryHookContext[] = [];
-  const onFailContextList: AssetsRetryHookContext[] = [];
-  page.on('console', async (msg) => {
-    if (msg.type() !== 'info') {
-      return;
-    }
-    const typeValue = await msg.args()?.[0].jsonValue();
-    const contextValue = await msg.args()?.[1].jsonValue();
-
-    if (typeValue === 'onRetry') {
-      onRetryContextList.push(contextValue);
-    } else if (typeValue === 'onSuccess') {
-      onSuccessContextList.push(contextValue);
-    } else if (typeValue === 'onFail') {
-      onFailContextList.push(contextValue);
-    }
-  });
+  const { onRetryContextList, onFailContextList, onSuccessContextList } =
+    await proxyPageConsole(page, rsbuild.port);
 
   await gotoPage(page, rsbuild);
   const compTestElement = page.locator('#async-comp-test-error');
@@ -403,28 +559,28 @@ test('@rsbuild/plugin-assets-retry onRetry and onFail options should work in fai
     onRetryContextList: [
       {
         times: 0,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
       {
         times: 1,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: 'http://a.com',
+        url: 'http://a.com/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
       {
         times: 2,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: 'http://b.com',
+        url: 'http://b.com/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
     ],
     onFailContextList: [
       {
         times: 3,
-        domain: '/',
-        url: '/static/js/async/src_AsyncCompTest_tsx.js',
+        domain: '<ORIGIN>',
+        url: '<ORIGIN>/static/js/async/src_AsyncCompTest_tsx.js',
         tagName: 'script',
       },
     ],

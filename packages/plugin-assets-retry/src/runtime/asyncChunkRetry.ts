@@ -61,7 +61,7 @@ function findCurrentDomain(url: string) {
       break;
     }
   }
-  return domain || url;
+  return domain || window.origin;
 }
 
 function findNextDomain(url: string) {
@@ -99,14 +99,10 @@ function getNextRetryUrl(
   existRetryTimes: number,
   nextDomain: string,
   originalSrcUrl: string,
-  originalScriptFilename: string,
 ) {
   return (
-    cleanUrl(
-      nextDomain +
-        (nextDomain[nextDomain.length - 1] === '/' ? '' : '/') +
-        originalScriptFilename,
-    ) + getUrlRetryQuery(existRetryTimes, getQueryFromUrl(originalSrcUrl))
+    cleanUrl(nextDomain + originalSrcUrl) +
+    getUrlRetryQuery(existRetryTimes, getQueryFromUrl(originalSrcUrl))
   );
 }
 
@@ -121,17 +117,12 @@ function initRetry(chunkId: string): Retry {
     __RUNTIME_GLOBALS_PUBLIC_PATH__ + originalScriptFilename;
 
   const existRetryTimes = 1;
-  const nextDomain = config.domain?.[0] ?? __RUNTIME_GLOBALS_PUBLIC_PATH__;
+  const nextDomain = config.domain?.[0] ?? window.origin;
 
   return {
     existRetryTimes,
     nextDomain,
-    nextRetryUrl: getNextRetryUrl(
-      existRetryTimes,
-      nextDomain,
-      originalSrcUrl,
-      originalScriptFilename,
-    ),
+    nextRetryUrl: getNextRetryUrl(existRetryTimes, nextDomain, originalSrcUrl),
 
     originalScriptFilename,
     originalSrcUrl,
@@ -156,7 +147,6 @@ function nextRetry(chunkId: string): Retry {
         existRetryTimes,
         nextDomain,
         originalSrcUrl,
-        originalScriptFilename,
       ),
 
       originalScriptFilename,
