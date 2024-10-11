@@ -110,6 +110,12 @@ export const pluginAsset = (): RsbuildPlugin => ({
         emitAssets,
       );
       createAssetRule('font', FONT_EXTENSIONS, emitAssets);
+
+      const assetsFilename = getFilename(config, 'assets', isProd);
+      chain.output.assetModuleFilename(assetsFilename);
+      if (!emitAssets) {
+        chain.module.generator.merge({ 'asset/resource': { emit: false } });
+      }
     });
   },
 });
